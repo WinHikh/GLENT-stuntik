@@ -20,28 +20,57 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Android export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /github/home/.local/share/godot/export_templates/4.3.stable
+          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz -O /tmp/templates.tpz
+          mkdir -p /tmp/godot-templates
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+          cp -a /tmp/godot-templates/templates/. /github/home/.local/share/godot/export_templates/4.3.stable/
+          echo "4.3.stable" > /github/home/.local/share/godot/export_templates/4.3.stable/version.txt
+
+      - name: Configure Android SDK and signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /github/home/.config/godot
+          keytool -genkeypair -v \
+            -keystore /github/home/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -validity 9999 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          cat > /github/home/.config/godot/editor_settings-4.3.tres <<'EOF'
+          [gd_resource type="EditorSettings" format=3]
+          [resource]
+          export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
+          export/android/android_sdk_path = "/usr/lib/android-sdk"
+          export/android/debug_keystore = "/github/home/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
       - name: Find and unpack project ZIP
         shell: bash
         run: |
           set -euo pipefail
-
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)"
-
           if [ -z "$ZIP_FILE" ]; then
             echo "::error::ZIP archive not found"
             exit 1
           fi
-
           mkdir -p source
           unzip -q "$ZIP_FILE" -d source
-
           PROJECT_FILE="$(find source -type f -name project.godot -print -quit)"
-
           if [ -z "$PROJECT_FILE" ]; then
             echo "::error::project.godot not found"
             exit 1
           fi
-
           echo "PROJECT_DIR=$(dirname "$PROJECT_FILE")" >> "$GITHUB_ENV"
 
       - name: Import Godot project
