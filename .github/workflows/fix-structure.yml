@@ -1,0 +1,29 @@
+
+name: Fix Godot Project Structure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Move project files to root
+        run: |
+          if [ -d "GLENT-VPN-Pitbike-Godot" ]; then
+            cp -a GLENT-VPN-Pitbike-Godot/. .
+            rm -rf GLENT-VPN-Pitbike-Godot
+          fi
+
+      - name: Save changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Godot project structure" || echo "No changes"
+          git push
