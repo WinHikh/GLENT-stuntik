@@ -1,3 +1,4 @@
+
 name: GLENT VPN PITBIKE - Android APK
 
 on:
@@ -123,8 +124,6 @@ jobs:
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -f "$HOME/.android/debug.keystore"
 
-          echo "Godot Android configuration created"
-
       - name: Find and unpack game
         shell: bash
         run: |
@@ -180,20 +179,21 @@ jobs:
       - name: Export Android APK
         shell: bash
         run: |
-          set -euo pipefail
-
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="android"
-
-          mkdir -p "$PROJECT_DIR/build"
-
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
-            "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk"
+            "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" \
+            2>&1 | tee "$RUNNER_TEMP/export.log" || true
 
-          test -s "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk"
+          echo "========== ANDROID EXPORT DIAGNOSTICS =========="
+
+          grep -inE 'error|invalid|missing|android|sdk|keystore|java|preset' \
+            "$RUNNER_TEMP/export.log" | tail -100 || true
+
+          if [ ! -s "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" ]; then
+            echo "::error::APK was not created. See export diagnostics above."
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
