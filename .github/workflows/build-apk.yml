@@ -60,14 +60,18 @@ jobs:
             "cmake;3.10.2.4988404" \
             "ndk;23.2.8568313"
 
-          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$SDK/ndk/23.2.8568313" >> "$GITHUB_ENV"
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+            echo "ANDROID_NDK_HOME=$SDK/ndk/23.2.8568313"
+          } >> "$GITHUB_ENV"
 
-          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          {
+            echo "$SDK/platform-tools"
+            echo "$SDK/cmdline-tools/latest/bin"
+          } >> "$GITHUB_PATH"
 
-      - name: Install Godot 4.3
+      - name: Install Godot 4.3 and export templates
         shell: bash
         run: |
           set -euo pipefail
@@ -111,8 +115,13 @@ jobs:
             -keypass android \
             -alias androiddebugkey \
             -keyalg RSA \
+            -keysize 2048 \
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
+
+          keytool -list \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android
 
       - name: Find and unpack project ZIP
         shell: bash
@@ -130,9 +139,11 @@ jobs:
               if [ -n "$PROJECT_FILE" ]; then
                 mkdir -p "$RUNNER_TEMP/game"
                 cp -a "$TEMP_DIR/." "$RUNNER_TEMP/game/"
+
                 PROJECT_FILE="$(find "$RUNNER_TEMP/game" -type f -name project.godot -print -quit)"
                 PROJECT_DIR="$(dirname "$PROJECT_FILE")"
-                echo "Found project in: $ZIP_FILE"
+
+                echo "Selected archive: $ZIP_FILE"
                 break
               fi
             fi
@@ -146,9 +157,40 @@ jobs:
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-      - name: Repair Android export preset
+          test -f "$PROJECT_DIR/project.godot"
+
+      - name: Configure Godot Android settings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.config/godot"
+
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          test -x "$JAVA_HOME/bin/java"
+          test -x "$ANDROID_HOME/platform-tools/adb"
+          test -d "$ANDROID_HOME/platforms/android-34"
+          test -d "$ANDROID_HOME/build-tools/34.0.0"
+          test -d "$ANDROID_HOME/ndk/23.2.8568313"
+          test -d "$ANDROID_HOME/cmake/3.10.2.4988404"
+          test -s "$HOME/.android/debug.keystore"
+
+      - name: Create Android export preset
         shell: bash
         run: |
           set -euo pipefail
@@ -187,35 +229,13 @@ jobs:
           keystore/debug=""
           keystore/debug_user=""
           keystore/debug_password=""
+          keystore/release=""
+          keystore/release_user=""
+          keystore/release_password=""
           EOF
 
-          echo "Android export preset recreated."
-
-      - name: Configure Godot Android settings
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p "$HOME/.config/godot"
-
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/debug_keystore = "$HOME/.android/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          EOF
-
-          test -x "$JAVA_HOME/bin/java"
-          test -x "$ANDROID_HOME/platform-tools/adb"
-          test -d "$ANDROID_HOME/platforms/android-34"
-          test -d "$ANDROID_HOME/build-tools/34.0.0"
-          test -d "$ANDROID_HOME/ndk/23.2.8568313"
-          test -d "$ANDROID_HOME/cmake/3.10.2.4988404"
-          test -f "$HOME/.android/debug.keystore"
+          echo "Android preset created."
+          cat "$PROJECT_DIR/export_presets.cfg"
 
       - name: Import Godot project
         shell: bash
@@ -223,25 +243,37 @@ jobs:
           set -euo pipefail
 
           godot --headless --editor \
-            --path "$PROJECT_DIR" --import
+            --path "$PROJECT_DIR" \
+            --import
 
-      - name: Validate Android preset
+      - name: Validate Android export configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          godot --headless --editor \
-            --path "$PROJECT_DIR" --quit
+          echo "Checking Godot:"
+          godot --version
 
-          grep -q 'name="Android"' "$PROJECT_DIR/export_presets.cfg"
-          grep -q 'package/unique_name="com.glentvpn.pitbikestunt"' "$PROJECT_DIR/export_presets.cfg"
+          echo "Checking Java:"
+          java -version
 
-          echo "Godot Android preset found."
+          echo "Checking Android SDK:"
+          adb version
+
+          echo "Checking export templates:"
+          ls -lh "$HOME/.local/share/godot/export_templates/4.3.stable/"
+
+          echo "Checking project:"
+          test -f "$PROJECT_DIR/project.godot"
+          test -f "$PROJECT_DIR/export_presets.cfg"
+          test -s "$HOME/.android/debug.keystore"
+
+          echo "Configuration checks completed."
 
       - name: Export Android APK
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
           export GODOT_ANDROID_KEYSTORE_DEBUG_USER="androiddebugkey"
@@ -255,12 +287,24 @@ jobs:
             "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" \
             2>&1 | tee "$RUNNER_TEMP/godot-export.log"
 
+          RESULT=${PIPESTATUS[0]}
+
+          if [ "$RESULT" -ne 0 ]; then
+            echo "::error::Godot export failed."
+
+            echo "Relevant diagnostics:"
+            grep -inE 'error|invalid|missing|android|sdk|keystore|java|preset' \
+              "$RUNNER_TEMP/godot-export.log" | tail -100 || true
+
+            exit "$RESULT"
+          fi
+
           if [ ! -s "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" ]; then
-            echo "::error::APK file was not created"
+            echo "::error::APK was not created"
             exit 1
           fi
 
-          echo "APK successfully created."
+          ls -lh "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
