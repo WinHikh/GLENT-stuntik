@@ -1,0 +1,19 @@
+config_version=5
+[application]
+config/name="GLENT VPN PITBIKE STUNT"
+run/main_scene="res://Main.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+[display]
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+[ input ]
+accelerate={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":87)]}
+brake={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":83)]}
+steer_left={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":65)]}
+steer_right={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":68)]}
+jump={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":32)]}
+camera_switch={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":67)]}
