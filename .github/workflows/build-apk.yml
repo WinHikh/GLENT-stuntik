@@ -1,11 +1,12 @@
-
 name: GLENT VPN PITBIKE - Android APK
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
+      - "**.zip"
+      - "project.godot"
+      - "export_presets.cfg"
       - ".github/workflows/build-apk.yml"
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
       - name: Install system tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip zip
+          sudo apt-get install -y wget unzip zip python3
 
       - name: Install Android SDK
         shell: bash
@@ -44,7 +45,9 @@ jobs:
 
           mkdir -p /tmp/android-cmdline
           unzip -q /tmp/android-cmdline.zip -d /tmp/android-cmdline
-          mv /tmp/android-cmdline/cmdline-tools "$SDK/cmdline-tools/latest"
+
+          mv /tmp/android-cmdline/cmdline-tools \
+            "$SDK/cmdline-tools/latest"
 
           export ANDROID_HOME="$SDK"
           export ANDROID_SDK_ROOT="$SDK"
@@ -64,6 +67,7 @@ jobs:
             echo "ANDROID_HOME=$SDK"
             echo "ANDROID_SDK_ROOT=$SDK"
             echo "ANDROID_NDK_HOME=$SDK/ndk/23.2.8568313"
+            echo "ANDROID_NDK_ROOT=$SDK/ndk/23.2.8568313"
           } >> "$GITHUB_ENV"
 
           {
@@ -71,7 +75,7 @@ jobs:
             echo "$SDK/cmdline-tools/latest/bin"
           } >> "$GITHUB_PATH"
 
-      - name: Install Godot 4.3 and export templates
+      - name: Install Godot 4.3
         shell: bash
         run: |
           set -euo pipefail
@@ -84,23 +88,57 @@ jobs:
           unzip -q /tmp/godot.zip -d /tmp/godot-bin
 
           chmod +x /tmp/godot-bin/Godot_v4.3-stable_linux.x86_64
-          sudo install /tmp/godot-bin/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
 
-          DEST="$HOME/.local/share/godot/export_templates/4.3.stable"
-          mkdir -p "$DEST"
+          sudo install \
+            /tmp/godot-bin/Godot_v4.3-stable_linux.x86_64 \
+            /usr/local/bin/godot
+
+          godot --version
+
+      - name: Install Godot Android export templates
+        shell: bash
+        run: |
+          set -euo pipefail
 
           wget -q \
             https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
             -O /tmp/godot-templates.tpz
 
           mkdir -p /tmp/godot-templates
-          unzip -q /tmp/godot-templates.tpz -d /tmp/godot-templates
-          cp -a /tmp/godot-templates/templates/. "$DEST/"
+
+          unzip -q /tmp/godot-templates.tpz \
+            -d /tmp/godot-templates
+
+          DEST="$HOME/.local/share/godot/export_templates/4.3.stable"
+          mkdir -p "$DEST"
+
+          for FILE in \
+            android_debug.apk \
+            android_release.apk \
+            android_source.zip
+          do
+            SOURCE="$(find /tmp/godot-templates \
+              -type f -name "$FILE" -print -quit)"
+
+            if [ -z "$SOURCE" ]; then
+              echo "::error::Missing export template: $FILE"
+              find /tmp/godot-templates -maxdepth 4 -type f
+              exit 1
+            fi
+
+            cp "$SOURCE" "$DEST/$FILE"
+            test -s "$DEST/$FILE"
+          done
+
+          printf '4.3.stable\n' > "$DEST/version.txt"
+
+          echo "Installed templates:"
+          ls -lh "$DEST"
 
           test -s "$DEST/android_debug.apk"
           test -s "$DEST/android_release.apk"
-
-          godot --version
+          test -s "$DEST/android_source.zip"
+          test -s "$DEST/version.txt"
 
       - name: Create Android debug keystore
         shell: bash
@@ -123,52 +161,63 @@ jobs:
             -keystore "$HOME/.android/debug.keystore" \
             -storepass android
 
-      - name: Find and unpack project ZIP
+      - name: Locate and unpack project
         shell: bash
         run: |
           set -euo pipefail
 
-          PROJECT_DIR=""
+          mkdir -p "$RUNNER_TEMP/game"
 
-          while IFS= read -r ZIP_FILE; do
-            TEMP_DIR="$(mktemp -d)"
+          PROJECT_FILE="$(find . \
+            -type f -name project.godot \
+            -not -path './.git/*' \
+            -print -quit || true)"
 
-            if unzip -q "$ZIP_FILE" -d "$TEMP_DIR"; then
-              PROJECT_FILE="$(find "$TEMP_DIR" -type f -name project.godot -print -quit || true)"
+          if [ -z "$PROJECT_FILE" ]; then
+            while IFS= read -r ZIP_FILE; do
+              TEMP_DIR="$(mktemp -d)"
 
-              if [ -n "$PROJECT_FILE" ]; then
-                mkdir -p "$RUNNER_TEMP/game"
-                cp -a "$TEMP_DIR/." "$RUNNER_TEMP/game/"
+              if unzip -q "$ZIP_FILE" -d "$TEMP_DIR"; then
+                PROJECT_FILE="$(find "$TEMP_DIR" \
+                  -type f -name project.godot \
+                  -print -quit || true)"
 
-                PROJECT_FILE="$(find "$RUNNER_TEMP/game" -type f -name project.godot -print -quit)"
-                PROJECT_DIR="$(dirname "$PROJECT_FILE")"
-
-                echo "Selected archive: $ZIP_FILE"
-                break
+                if [ -n "$PROJECT_FILE" ]; then
+                  cp -a "$TEMP_DIR/." "$RUNNER_TEMP/game/"
+                  PROJECT_FILE="$(find "$RUNNER_TEMP/game" \
+                    -type f -name project.godot -print -quit)"
+                  break
+                fi
               fi
-            fi
 
-            rm -rf "$TEMP_DIR"
-          done < <(find . -maxdepth 1 -type f -iname '*.zip' | sort)
+              rm -rf "$TEMP_DIR"
+            done < <(find . -type f -iname '*.zip' \
+              -not -path './.git/*' | sort)
+          fi
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::No ZIP containing project.godot found"
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "::error::Cannot find project.godot in repository or ZIP"
             exit 1
           fi
 
+          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
+
+          echo "Selected project: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
           test -f "$PROJECT_DIR/project.godot"
 
-      - name: Configure Godot Android settings
+      - name: Configure Godot 4.3 editor settings
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p "$HOME/.config/godot"
+          SETTINGS_DIR="$HOME/.config/godot"
+          mkdir -p "$SETTINGS_DIR"
 
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          cat > "$SETTINGS_DIR/editor_settings-4.3.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
@@ -179,18 +228,17 @@ jobs:
           export/android/debug_keystore_pass = "android"
           EOF
 
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "Godot Editor Settings:"
+          cat "$SETTINGS_DIR/editor_settings-4.3.tres"
 
-          test -x "$JAVA_HOME/bin/java"
-          test -x "$ANDROID_HOME/platform-tools/adb"
+          test -d "$JAVA_HOME"
           test -d "$ANDROID_HOME/platforms/android-34"
           test -d "$ANDROID_HOME/build-tools/34.0.0"
           test -d "$ANDROID_HOME/ndk/23.2.8568313"
           test -d "$ANDROID_HOME/cmake/3.10.2.4988404"
           test -s "$HOME/.android/debug.keystore"
 
-      - name: Create Android export preset
+      - name: Repair Android export preset
         shell: bash
         run: |
           set -euo pipefail
@@ -205,7 +253,7 @@ jobs:
           export_filter="all_resources"
           include_filter=""
           exclude_filter=""
-          export_path="build/GLENT-VPN-Pitbike.apk"
+          export_path=""
           patches=PackedStringArray()
           encryption_include_filters=""
           encryption_exclude_filters=""
@@ -218,10 +266,8 @@ jobs:
           gradle_build/use_gradle_build=false
           architectures/armeabi-v7a=false
           architectures/arm64-v8a=true
-          architectures/x86=false
-          architectures/x86_64=false
           version/code=1
-          version/name="0.1.0"
+          version/name="1.0"
           package/unique_name="com.glentvpn.pitbikestunt"
           package/name="GLENT VPN PITBIKE STUNT"
           package/signed=true
@@ -234,8 +280,48 @@ jobs:
           keystore/release_password=""
           EOF
 
-          echo "Android preset created."
+          echo "Android preset:"
           cat "$PROJECT_DIR/export_presets.cfg"
+
+      - name: Configure ETC2 ASTC texture import
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - "$PROJECT_DIR/project.godot" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          content = path.read_text()
+
+          setting = "textures/vram_compression/import_etc2_astc=true"
+
+          if setting in content:
+              print("ETC2/ASTC already enabled")
+              raise SystemExit(0)
+
+          lines = content.splitlines()
+          start = None
+          end = len(lines)
+
+          for i, line in enumerate(lines):
+              if line.strip() == "[rendering]":
+                  start = i
+                  break
+
+          if start is None:
+              lines.extend(["", "[rendering]", setting])
+          else:
+              for i in range(start + 1, len(lines)):
+                  if lines[i].strip().startswith("["):
+                      end = i
+                      break
+              lines.insert(end, setting)
+
+          path.write_text("\n".join(lines) + "\n")
+          print("ETC2/ASTC enabled")
+          PY
 
       - name: Import Godot project
         shell: bash
@@ -246,29 +332,34 @@ jobs:
             --path "$PROJECT_DIR" \
             --import
 
-      - name: Validate Android export configuration
+      - name: Validate Android configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking Godot:"
+          echo "Godot:"
           godot --version
 
-          echo "Checking Java:"
+          echo "Java:"
           java -version
 
-          echo "Checking Android SDK:"
+          echo "Android SDK:"
           adb version
 
-          echo "Checking export templates:"
-          ls -lh "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          echo "Templates:"
+          ls -lh "$HOME/.local/share/godot/export_templates/4.3.stable"
 
-          echo "Checking project:"
+          echo "Editor settings:"
+          ls -lh "$HOME/.config/godot/editor_settings-4.3.tres"
+
+          echo "Project:"
           test -f "$PROJECT_DIR/project.godot"
-          test -f "$PROJECT_DIR/export_presets.cfg"
+          test -s "$PROJECT_DIR/export_presets.cfg"
+
+          echo "Keystore:"
           test -s "$HOME/.android/debug.keystore"
 
-          echo "Configuration checks completed."
+          echo "Configuration checks passed."
 
       - name: Export Android APK
         shell: bash
@@ -281,20 +372,28 @@ jobs:
 
           mkdir -p "$PROJECT_DIR/build"
 
+          LOG="$RUNNER_TEMP/godot-export.log"
+
+          set +e
+
           godot --headless --verbose \
             --path "$PROJECT_DIR" \
             --export-debug "Android" \
             "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" \
-            2>&1 | tee "$RUNNER_TEMP/godot-export.log"
+            2>&1 | tee "$LOG"
 
           RESULT=${PIPESTATUS[0]}
 
-          if [ "$RESULT" -ne 0 ]; then
-            echo "::error::Godot export failed."
+          set -e
 
-            echo "Relevant diagnostics:"
-            grep -inE 'error|invalid|missing|android|sdk|keystore|java|preset' \
-              "$RUNNER_TEMP/godot-export.log" | tail -100 || true
+          if [ "$RESULT" -ne 0 ]; then
+            echo "::error::Godot Android export failed"
+
+            echo "===== GODOT DIAGNOSTICS ====="
+
+            grep -inE \
+              'error|invalid|missing|android|sdk|keystore|java|preset|template' \
+              "$LOG" | tail -150 || true
 
             exit "$RESULT"
           fi
@@ -304,9 +403,10 @@ jobs:
             exit 1
           fi
 
+          echo "APK successfully created:"
           ls -lh "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk"
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: GLENT-VPN-Pitbike-APK
