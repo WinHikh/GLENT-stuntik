@@ -14,6 +14,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,23 +25,34 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y wget unzip zip
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip zip
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
+
           SDK="$HOME/android-sdk"
           mkdir -p "$SDK/cmdline-tools"
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/android-cmdline.zip
+
+          wget -q \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -O /tmp/android-cmdline.zip
+
           mkdir -p /tmp/android-cmdline
           unzip -q /tmp/android-cmdline.zip -d /tmp/android-cmdline
+
           mv /tmp/android-cmdline/cmdline-tools "$SDK/cmdline-tools/latest"
+
           export ANDROID_HOME="$SDK"
           export ANDROID_SDK_ROOT="$SDK"
           export PATH="$SDK/cmdline-tools/latest/bin:$PATH"
-          yes | sdkmanager --sdk_root="$SDK" --licenses >/dev/null || true
+
+          yes | sdkmanager --sdk_root="$SDK" --licenses || true
+
           sdkmanager --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-34" \
@@ -48,69 +60,108 @@ jobs:
             "cmdline-tools;latest" \
             "cmake;3.10.2.4988404" \
             "ndk;23.2.8568313"
-          {
-            echo "ANDROID_HOME=$SDK"
-            echo "ANDROID_SDK_ROOT=$SDK"
-            echo "$SDK/platform-tools"
-            echo "$SDK/cmdline-tools/latest/bin"
-          } >> "$GITHUB_ENV"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$SDK/ndk/23.2.8568313" >> "$GITHUB_ENV"
+
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
       - name: Install Godot 4.3 and export templates
         shell: bash
         run: |
           set -euo pipefail
-          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip -O /tmp/godot.zip
+
+          wget -q \
+            https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip \
+            -O /tmp/godot.zip
+
           mkdir -p /tmp/godot-bin
           unzip -q /tmp/godot.zip -d /tmp/godot-bin
+
           chmod +x /tmp/godot-bin/Godot_v4.3-stable_linux.x86_64
           sudo install /tmp/godot-bin/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
-          mkdir -p "$HOME/.local/share/godot/export_templates/4.3.stable"
-          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz -O /tmp/godot-templates.tpz
+
+          DEST="$HOME/.local/share/godot/export_templates/4.3.stable"
+          mkdir -p "$DEST"
+
+          wget -q \
+            https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz \
+            -O /tmp/godot-templates.tpz
+
           mkdir -p /tmp/godot-templates
           unzip -q /tmp/godot-templates.tpz -d /tmp/godot-templates
-          cp -a /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.3.stable/"
-          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+
+          cp -a /tmp/godot-templates/templates/. "$DEST/"
+
+          test -s "$DEST/android_debug.apk"
+          test -s "$DEST/android_release.apk"
+
           godot --version
 
       - name: Create debug signing key
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p "$HOME/.android"
+
           keytool -genkeypair -noprompt \
             -keystore "$HOME/.android/debug.keystore" \
-            -storepass android -keypass android \
-            -alias androiddebugkey -keyalg RSA -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Unpack project ZIP
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -printf '%f\n' | sort | head -n 1)"
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::No project ZIP found in repository root"
+
+          PROJECT_DIR=""
+
+          while IFS= read -r ZIP_FILE; do
+            TEMP_DIR="$RUNNER_TEMP/try-zip"
+            rm -rf "$TEMP_DIR"
+            mkdir -p "$TEMP_DIR"
+
+            if unzip -q "$ZIP_FILE" -d "$TEMP_DIR"; then
+              PROJECT_FILE="$(find "$TEMP_DIR" -type f -name project.godot -print -quit || true)"
+
+              if [ -n "$PROJECT_FILE" ]; then
+                mkdir -p "$RUNNER_TEMP/game"
+                cp -a "$TEMP_DIR/." "$RUNNER_TEMP/game/"
+                PROJECT_FILE="$(find "$RUNNER_TEMP/game" -type f -name project.godot -print -quit)"
+                PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+                echo "Selected project archive: $ZIP_FILE"
+                break
+              fi
+            fi
+          done < <(find . -maxdepth 1 -type f -iname '*.zip' | sort)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::No ZIP containing project.godot found"
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/game"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/game"
-          PROJECT_FILE="$(find "$RUNNER_TEMP/game" -type f -name project.godot -print -quit)"
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "::error::project.godot not found inside ZIP"
+
+          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
+            echo "::error::export_presets.cfg not found"
             exit 1
           fi
-          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Using ZIP: $ZIP_FILE"
-          echo "Using project: $PROJECT_DIR"
-          test -f "$PROJECT_DIR/export_presets.cfg"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Configure Godot Android editor settings
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p "$HOME/.config/godot"
+
           cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
@@ -119,35 +170,43 @@ jobs:
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/debug_keystore = "$HOME/.android/debug.keystore"
           EOF
+
           test -x "$JAVA_HOME/bin/java"
           test -x "$ANDROID_HOME/platform-tools/adb"
           test -d "$ANDROID_HOME/platforms/android-34"
           test -d "$ANDROID_HOME/build-tools/34.0.0"
           test -d "$ANDROID_HOME/ndk/23.2.8568313"
-          test -d "$ANDROID_HOME/cmake/3.10.2.4988404"
+          test -f "$HOME/.android/debug.keystore"
+
           echo "Java: $JAVA_HOME"
           echo "Android SDK: $ANDROID_HOME"
-          echo "NDK: $ANDROID_NDK_HOME"
 
       - name: Import Godot project
         shell: bash
         run: |
           set -euo pipefail
-          godot --headless --editor --path "$PROJECT_DIR" --import
+
+          godot --headless --editor \
+            --path "$PROJECT_DIR" --import
 
       - name: Export APK
         shell: bash
         env:
-          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/debug.keystore
           GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
           GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
           set -euo pipefail
+
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
+
           mkdir -p "$PROJECT_DIR/build"
-          godot --headless --verbose --path "$PROJECT_DIR" \
-            --export-debug "Android" "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" \
+
+          godot --headless --verbose \
+            --path "$PROJECT_DIR" \
+            --export-debug "Android" \
+            "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk" \
             2>&1 | tee "$RUNNER_TEMP/godot-export.log"
+
           test -s "$PROJECT_DIR/build/GLENT-VPN-Pitbike.apk"
 
       - name: Upload APK artifact
